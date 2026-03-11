@@ -1,78 +1,204 @@
+"""
+Cartoonification pipeline designed to be robust for low-resolution inputs.
+
+Steps:
+1) Optional smart upscale for tiny sources (bicubic + mild sharpening).
+2) Edge-preserving smoothing (bilateral/median/gaussian).
+3) Color quantization (K-Means via OpenCV OR Median Cut via PIL).
+4) Edge extraction with adaptive threshold, thickness control via dilation.
+5) Composite edges on quantized base using 'multiply' style darkening.
+
+All operations are in BGR (OpenCV) unless noted.
+"""
+
+from typing import Tuple
 import cv2
 import numpy as np
-import os
+from PIL import Image
 
-def cartoonify_image(image_path, output_path, max_width=600, num_colors=8, line_strength=1):
-    """
-    Applies a fast, high-quality cartoon filter with clear outlines and flat colors.
 
-    This optimized version resizes the image before heavy processing (like color
-    quantization) to ensure a fast, responsive result, then combines it with a
-    full-resolution edge mask for sharp lines.
-
-    Args:
-        image_path (str): The full path to the input image.
-        output_path (str): The full path where the cartoonified image will be saved.
-        max_width (int): The maximum width for processing. Larger images are downscaled.
-        num_colors (int): The number of distinct colors for quantization (K-Means).
-        line_strength (int): Multiplier for edge thickness.
-    """
-    if not os.path.exists(image_path):
-        print(f"Error: Input image not found at {image_path}")
-        return
-
-    img = cv2.imread(image_path)
+# -----------------------------
+# I/O helpers
+# -----------------------------
+def load_image_bgr(path: str) -> np.ndarray:
+    img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
     if img is None:
-        print(f"Error: Could not read the image from {image_path}.")
-        return
+        raise ValueError("Unable to read image")
+    return img
 
-    # --- 1. Resize Image for Fast Color Processing ---
-    # Store original dimensions to upscale later
-    original_height, original_width = img.shape[:2]
-    
-    # Calculate new dimensions while preserving aspect ratio
-    if original_width > max_width:
-        new_height = int(max_width * original_height / original_width)
-        small_img = cv2.resize(img, (max_width, new_height), interpolation=cv2.INTER_AREA)
-    else:
-        small_img = img
 
-    # --- 2. Color Quantization on the Small Image (K-Means) ---
-    # This is the slowest step, so we run it on the downscaled image.
-    pixels = np.float32(small_img.reshape(-1, 3))
-    
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 0.5)
-    _, labels, centers = cv2.kmeans(pixels, num_colors, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
-    
-    centers = np.uint8(centers)
-    flat_colors_small = centers[labels.flatten()]
-    flat_colors_small = flat_colors_small.reshape(small_img.shape)
+def save_image_bgr(img: np.ndarray, path: str) -> None:
+    # Use imencode to handle unicode paths cross-platform
+    ext = path.split(".")[-1].lower()
+    ok, buf = cv2.imencode(f".{ext}", img)
+    if not ok:
+        raise ValueError("Failed to encode image")
+    buf.tofile(path)
 
-    # --- 3. Edge Detection on the Full-Resolution Image ---
-    # For sharp, high-quality lines, we perform edge detection on the original image.
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blurred_gray = cv2.medianBlur(gray, 5)
-    
-    edges = cv2.adaptiveThreshold(blurred_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, 
-                                  cv2.THRESH_BINARY, 9, 9)
-    
-    # --- 4. Thicken the Lines for "Inked" Look ---
-    edges_inverted = cv2.bitwise_not(edges)
-    kernel_size = 2 * line_strength + 1
-    kernel = np.ones((kernel_size, kernel_size), np.uint8)
-    thick_edges = cv2.dilate(edges_inverted, kernel, iterations=1)
-    final_edge_mask = cv2.bitwise_not(thick_edges)
 
-    # --- 5. Upscale the Flat Colors and Combine with Edges ---
-    # Resize the flat color image back to the original dimensions
-    flat_colors_large = cv2.resize(flat_colors_small, (original_width, original_height), interpolation=cv2.INTER_LINEAR)
-    
-    # Combine the high-resolution colors with the high-resolution edge mask
-    cartoon_image = cv2.bitwise_and(flat_colors_large, flat_colors_large, mask=final_edge_mask)
+# -----------------------------
+# Resizing utilities
+# -----------------------------
+def resize_long_side(bgr: np.ndarray, long_side: int) -> np.ndarray:
+    h, w = bgr.shape[:2]
+    if long_side <= 0:
+        return bgr
+    scale = long_side / max(h, w)
+    if abs(scale - 1.0) < 1e-6:
+        return bgr
+    new_w = int(round(w * scale))
+    new_h = int(round(h * scale))
+    interp = cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA
+    return cv2.resize(bgr, (new_w, new_h), interpolation=interp)
 
-    # --- 6. Save the Result ---
-    try:
-        cv2.imwrite(output_path, cartoon_image)
-        print(f"Optimized cartoon filter applied and saved successfully: {output_path}")
-    except Exception as e:
-        print(f"Error: Could not save the image. Reason: {e}")
+
+def smart_upscale_if_small(bgr: np.ndarray, target_long: int) -> np.ndarray:
+    h, w = bgr.shape[:2]
+    if max(h, w) >= target_long:
+        return bgr
+    # 1) upscale to target long side
+    up = resize_long_side(bgr, target_long)
+    # 2) mild unsharp mask to counter bicubic softness
+    blur = cv2.GaussianBlur(up, (0, 0), sigmaX=1.0)
+    sharp = cv2.addWeighted(up, 1.10, blur, -0.10, 0)
+    return sharp
+
+
+# -----------------------------
+# Smoothing
+# -----------------------------
+def smooth(bgr: np.ndarray, kind: str) -> np.ndarray:
+    kind = (kind or "bilateral").lower()
+    if kind == "median":
+        # 5x5 median for speckle noise
+        return cv2.medianBlur(bgr, 5)
+    if kind == "gaussian":
+        return cv2.GaussianBlur(bgr, (5, 5), 0)
+    # default: bilateral edge-preserving
+    # Parameters balanced for low-res tolerance
+    return cv2.bilateralFilter(bgr, d=7, sigmaColor=50, sigmaSpace=7)
+
+
+# -----------------------------
+# Quantization
+# -----------------------------
+def quantize_kmeans(bgr: np.ndarray, k: int) -> np.ndarray:
+    # convert to data for kmeans
+    Z = bgr.reshape((-1, 3)).astype(np.float32)
+    # Stop either at 10 iterations or epsilon
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+    # KMeans++ centers improves stability
+    attempts = 1
+    flags = cv2.KMEANS_PP_CENTERS
+    _, labels, centers = cv2.kmeans(Z, k, None, criteria, attempts, flags)
+    centers = np.uint8(np.clip(centers, 0, 255))
+    quant = centers[labels.flatten()]
+    return quant.reshape(bgr.shape)
+
+
+def quantize_mediancut(bgr: np.ndarray, k: int) -> np.ndarray:
+    # Use PIL's MedianCut via paletted quantize
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    pil = Image.fromarray(rgb)
+    # colors=k ensures up to k colors, method=MEDIANCUT
+    q = pil.quantize(colors=int(k), method=Image.MEDIANCUT, dither=Image.Dither.NONE)
+    out = q.convert("RGB")
+    return cv2.cvtColor(np.array(out), cv2.COLOR_RGB2BGR)
+
+
+def quantize(bgr: np.ndarray, k: int, method: str) -> np.ndarray:
+    method = (method or "kmeans").lower()
+    k = max(2, int(k))
+    if method == "mediancut":
+        return quantize_mediancut(bgr, k)
+    return quantize_kmeans(bgr, k)
+
+
+# -----------------------------
+# Edge extraction + composite
+# -----------------------------
+def extract_edges(bgr: np.ndarray, thickness: float) -> np.ndarray:
+    """
+    Return a 0..255 single-channel edge mask where white=edges.
+    thickness: ~0.1..1.0 user input. We map to dilation size.
+    """
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+
+    # Edge-friendly blur beforehand to reduce noise
+    g = cv2.bilateralFilter(gray, d=5, sigmaColor=50, sigmaSpace=5)
+
+    # Adaptive threshold gives inking effect across luminance
+    th = cv2.adaptiveThreshold(
+        g, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 7, 2
+    )
+
+    # Invert so edges are black later; but we return white edges mask
+    edges = cv2.bitwise_not(th)
+
+    # Control thickness by dilation kernel mapped from thickness
+    # Map 0.1..1.0 to kernel 1..3
+    k = 1 + int(round(np.interp(thickness, [0.1, 1.0], [0, 2])))
+    if k > 1:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        edges = cv2.dilate(edges, kernel, iterations=1)
+
+    return edges
+
+
+def composite_edges(base_bgr: np.ndarray, edges_white: np.ndarray) -> np.ndarray:
+    """
+    Darken edges onto base. edges_white=255 on edges.
+    Implementation: multiply-like blend with an edge opacity.
+    """
+    # Convert edges to 0..1 opacity map
+    alpha = (edges_white.astype(np.float32) / 255.0)  # 1 at edges, 0 elsewhere
+    # Edge darkness factor (how much darker than base)
+    edge_dark = 0.65  # keep readable on light themes
+    # Build a darkened version of base
+    dark = (base_bgr.astype(np.float32) * edge_dark).astype(np.uint8)
+    # Linear interpolate: where alpha=1 use dark, else base
+    out = (dark.astype(np.float32) * alpha[..., None] +
+           base_bgr.astype(np.float32) * (1.0 - alpha[..., None]))
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+# -----------------------------
+# Main pipeline
+# -----------------------------
+def cartoonify_image(
+    src_bgr: np.ndarray,
+    *,
+    blur_type: str = "bilateral",
+    quantizer: str = "kmeans",
+    num_colors: int = 8,
+    line_strength: float = 0.5,
+    target_long_side: int = 1024,
+    upscale_small: bool = True,
+) -> np.ndarray:
+    """
+    Orchestrates a full run. Designed to work well on low-res inputs.
+    """
+    if src_bgr is None or src_bgr.size == 0:
+        raise ValueError("Empty image")
+
+    # 0) Smart upscale for tiny images first (prevents thick pixelation)
+    work = src_bgr.copy()
+    if upscale_small:
+        work = smart_upscale_if_small(work, max(512, target_long_side))
+
+    # 1) Resize to target processing size (stable math for later steps)
+    work = resize_long_side(work, target_long_side)
+
+    # 2) Edge-preserving smooth
+    sm = smooth(work, blur_type)
+
+    # 3) Color quantization
+    quant = quantize(sm, num_colors, quantizer)
+
+    # 4) Edge detection
+    edges = extract_edges(sm, thickness=float(line_strength))
+
+    # 5) Composite
+    out = composite_edges(quant, edges)
+
+    return out
