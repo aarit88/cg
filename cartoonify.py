@@ -70,13 +70,18 @@ def smart_upscale_if_small(bgr: np.ndarray, target_long: int) -> np.ndarray:
 def smooth(bgr: np.ndarray, kind: str) -> np.ndarray:
     kind = (kind or "bilateral").lower()
     if kind == "median":
-        # 5x5 median for speckle noise
-        return cv2.medianBlur(bgr, 5)
+        # Heavy median for a chunky/oil-paint style
+        return cv2.medianBlur(bgr, 13)
     if kind == "gaussian":
-        return cv2.GaussianBlur(bgr, (5, 5), 0)
+        # Strong gaussian for a soft, out-of-focus dreamy style
+        return cv2.GaussianBlur(bgr, (21, 21), 0)
+    
     # default: bilateral edge-preserving
-    # Parameters balanced for low-res tolerance
-    return cv2.bilateralFilter(bgr, d=7, sigmaColor=50, sigmaSpace=7)
+    # Apply multiple passes for a strong "painted" and "flattened" look
+    tmp = bgr.copy()
+    for _ in range(2):
+        tmp = cv2.bilateralFilter(tmp, d=9, sigmaColor=75, sigmaSpace=75)
+    return tmp
 
 
 # -----------------------------
