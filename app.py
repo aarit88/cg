@@ -12,7 +12,7 @@ st.markdown("""
 <style>
 /* Base overrides */
 [data-testid="stAppViewContainer"] {
-    background: linear-gradient(135deg, #0f0a1a 0%, #1a1035 25%, #1e1245 50%, #1a0a30 75%, #0f0a1a 100%);
+    background: linear-gradient(135deg, #f5f7f7 0%, #ebf4f3 25%, #d6ecea 50%, #ebf4f3 75%, #f5f7f7 100%);
     background-size: 400% 400%;
     animation: gradientShift 15s ease infinite;
 }
@@ -21,9 +21,9 @@ st.markdown("""
     animation: fadeSlideUp 0.8s ease-out forwards;
 }
 [data-testid="stSidebar"] {
-    background: rgba(30, 20, 50, 0.65);
+    background: rgba(235, 244, 243, 0.65);
     backdrop-filter: blur(16px);
-    border-right: 1px solid rgba(139, 92, 246, 0.12);
+    border-right: 1px solid rgba(190, 220, 218, 0.4);
 }
 
 /* Animations */
@@ -52,24 +52,32 @@ header { visibility: hidden !important; }
 
 /* Decorative Orbs */
 .bg-orbs { position: fixed; inset: 0; pointer-events: none; z-index: -1; overflow: hidden; }
-.bg-orbs .orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.35; }
+.bg-orbs .orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.7; }
 .bg-orbs .orb:nth-child(1) {
   width: 500px; height: 500px;
-  background: radial-gradient(circle, #6366f1, transparent 70%);
+  background: radial-gradient(circle, #bedcda, transparent 70%);
   top: -10%; left: -8%;
   animation: orbFloat1 18s ease-in-out infinite;
 }
 .bg-orbs .orb:nth-child(2) {
   width: 400px; height: 400px;
-  background: radial-gradient(circle, #f5d0fe, transparent 70%);
+  background: radial-gradient(circle, #cde3e1, transparent 70%);
   bottom: -5%; right: -5%;
   animation: orbFloat2 22s ease-in-out infinite;
 }
 .bg-orbs .orb:nth-child(3) {
   width: 300px; height: 300px;
-  background: radial-gradient(circle, #c4b5fd, transparent 70%);
+  background: radial-gradient(circle, #a8cfcc, transparent 70%);
   top: 40%; left: 55%;
   animation: orbFloat1 20s ease-in-out infinite reverse;
+}
+
+/* Brand */
+.st-emotion-cache-12w0qpk h1 {
+    font-weight: 800;
+    background: linear-gradient(135deg, #3f6865, #79a6a2);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
 </style>
 
