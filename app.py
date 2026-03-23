@@ -1,127 +1,131 @@
-import os
-import uuid
+import streamlit as st
+import numpy as np
+import cv2
 from pathlib import Path
-from flask import Flask, render_template, request, jsonify, url_for
-from werkzeug.utils import secure_filename
+from PIL import Image
+from cartoonify import cartoonify_image
+from streamlit_image_comparison import image_comparison
 
-from cartoonify import cartoonify_image, load_image_bgr, save_image_bgr
+st.set_page_config(page_title="Sketchify Web", page_icon="🎨", layout="wide")
 
-# -----------------------------
-# Flask setup
-# -----------------------------
-BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
-UPLOAD_DIR = STATIC_DIR / "uploads"
-RESULT_DIR = STATIC_DIR / "results"
-TEMPLATES_DIR = BASE_DIR / "templates"
+st.markdown("""
+<style>
+/* Base overrides */
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(135deg, #0f0a1a 0%, #1a1035 25%, #1e1245 50%, #1a0a30 75%, #0f0a1a 100%);
+    background-size: 400% 400%;
+    animation: gradientShift 15s ease infinite;
+}
+[data-testid="stSidebar"] {
+    background: rgba(30, 20, 50, 0.65);
+    backdrop-filter: blur(16px);
+    border-right: 1px solid rgba(139, 92, 246, 0.12);
+}
 
-for p in (UPLOAD_DIR, RESULT_DIR):
-    p.mkdir(parents=True, exist_ok=True)
+/* Animations */
+@keyframes gradientShift {
+  0%   { background-position: 0% 50% }
+  50%  { background-position: 100% 50% }
+  100% { background-position: 0% 50% }
+}
+@keyframes orbFloat1 {
+  0%, 100% { transform: translate(0, 0) scale(1) }
+  33%      { transform: translate(40px, -30px) scale(1.1) }
+  66%      { transform: translate(-20px, 20px) scale(.95) }
+}
+@keyframes orbFloat2 {
+  0%, 100% { transform: translate(0, 0) scale(1) }
+  33%      { transform: translate(-30px, 20px) scale(.9) }
+  66%      { transform: translate(25px, -25px) scale(1.08) }
+}
 
-ALLOWED_EXT = {"jpg", "jpeg", "png", "webp"}
+/* Hide default components */
+header { visibility: hidden !important; }
 
-app = Flask(
-    __name__,
-    static_folder=str(STATIC_DIR),
-    template_folder=str(TEMPLATES_DIR),
-)
+/* Decorative Orbs */
+.bg-orbs { position: fixed; inset: 0; pointer-events: none; z-index: -1; overflow: hidden; }
+.bg-orbs .orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.35; }
+.bg-orbs .orb:nth-child(1) {
+  width: 500px; height: 500px;
+  background: radial-gradient(circle, #6366f1, transparent 70%);
+  top: -10%; left: -8%;
+  animation: orbFloat1 18s ease-in-out infinite;
+}
+.bg-orbs .orb:nth-child(2) {
+  width: 400px; height: 400px;
+  background: radial-gradient(circle, #f5d0fe, transparent 70%);
+  bottom: -5%; right: -5%;
+  animation: orbFloat2 22s ease-in-out infinite;
+}
+.bg-orbs .orb:nth-child(3) {
+  width: 300px; height: 300px;
+  background: radial-gradient(circle, #c4b5fd, transparent 70%);
+  top: 40%; left: 55%;
+  animation: orbFloat1 20s ease-in-out infinite reverse;
+}
+</style>
 
+<div class="bg-orbs" aria-hidden="true">
+    <div class="orb"></div>
+    <div class="orb"></div>
+    <div class="orb"></div>
+</div>
+""", unsafe_allow_html=True)
 
-# -----------------------------
-# Helpers
-# -----------------------------
-def allowed_file(filename: str) -> bool:
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXT
+st.title("🎨 Sketchify Web")
+st.markdown("**AI Cartoonifier** - Transform your photos into vibrant cartoon-style artwork.", unsafe_allow_html=True)
 
+st.sidebar.header("⚙️ Settings")
 
-def new_name(suffix: str = ".png") -> str:
-    return f"{uuid.uuid4().hex}{suffix}"
+blur_type = st.sidebar.selectbox("Smoothing", ["bilateral", "median", "gaussian"], index=0)
+quantizer = st.sidebar.selectbox("Quantizer", ["kmeans", "mediancut"], index=0)
 
+num_colors = st.sidebar.slider("Colors", min_value=4, max_value=32, value=8)
+line_strength = st.sidebar.slider("Edge Thickness", min_value=0.1, max_value=2.0, value=0.5, step=0.1)
+target_long_side = st.sidebar.slider("Target Resolution", min_value=256, max_value=2048, value=1024, step=256)
+upscale_small = st.sidebar.checkbox("Smart Upscale Small Images", value=True)
 
-# -----------------------------
-# Routes
-# -----------------------------
-@app.route("/", methods=["GET"])
-def index():
-    return render_template("index.html")
+uploaded_file = st.file_uploader("Drop or browse JPG, PNG, WEBP (Limit 20MB)", type=["jpg", "jpeg", "png", "webp"])
 
+if uploaded_file is not None:
+    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-@app.route("/upload", methods=["POST"])
-def upload():
-    """
-    Expects form fields:
-      file: image
-      blur_type: 'bilateral' | 'median' | 'gaussian'
-      quantizer: 'kmeans' | 'mediancut'
-      num_colors: int [4..16]
-      line_strength: float [0.1..1.0]
-      target_long_side: int px
-      upscale_small: 'true' | 'false'
-    """
-    if "file" not in request.files:
-        return jsonify({"error": "No file field"}), 400
+    if img is None:
+        st.error("❌ Could not read the image")
+    else:        
+        if st.button("✦ Run Sketchify", use_container_width=True, type="primary"):
+            with st.spinner("Processing... please wait"):
+                try:
+                    result = cartoonify_image(
+                        img,
+                        blur_type=blur_type,
+                        quantizer=quantizer,
+                        num_colors=num_colors,
+                        line_strength=line_strength,
+                        target_long_side=target_long_side,
+                        upscale_small=upscale_small,
+                    )
 
-    f = request.files["file"]
-    if not f or f.filename == "":
-        return jsonify({"error": "No file selected"}), 400
-    if not allowed_file(f.filename):
-        return jsonify({"error": "Unsupported format"}), 400
+                    st.markdown("### Result Comparison")
+                    # Convert BGR to RGB for Streamlit rendering
+                    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    res_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+                    
+                    image_comparison(
+                        img1=Image.fromarray(img_rgb),
+                        img2=Image.fromarray(res_rgb),
+                        label1="Original",
+                        label2="Cartoonified"
+                    )
 
-    # Save upload
-    ext = "." + f.filename.rsplit(".", 1)[1].lower()
-    safe = secure_filename(f.filename)
-    if not allowed_file(safe):
-        safe = new_name(ext)
-    upload_name = new_name(ext)
-    upload_path = UPLOAD_DIR / upload_name
-    f.save(str(upload_path))
-
-    # Read params with sane fallbacks
-    blur_type = request.form.get("blur_type", "bilateral").lower()
-    quantizer = request.form.get("quantizer", "kmeans").lower()
-    try:
-        num_colors = int(request.form.get("num_colors", 8))
-    except Exception:
-        num_colors = 8
-    try:
-        line_strength = float(request.form.get("line_strength", 0.5))
-    except Exception:
-        line_strength = 0.5
-    try:
-        target_long_side = int(request.form.get("target_long_side", 1024))
-    except Exception:
-        target_long_side = 1024
-    upscale_small = request.form.get("upscale_small", "true").lower() == "true"
-
-    # Process
-    try:
-        src = load_image_bgr(str(upload_path))
-        out = cartoonify_image(
-            src,
-            blur_type=blur_type,
-            quantizer=quantizer,
-            num_colors=max(4, min(32, num_colors)),
-            line_strength=max(0.05, min(2.0, line_strength)),
-            target_long_side=max(256, min(4096, target_long_side)),
-            upscale_small=upscale_small,
-        )
-    except Exception as e:
-        return jsonify({"error": f"Processing failed: {e}"}), 500
-
-    # Save result as PNG to avoid JPG re-compress artifacts
-    result_name = new_name(".png")
-    result_path = RESULT_DIR / result_name
-    save_image_bgr(out, str(result_path))
-
-    return jsonify(
-        {
-            "ok": True,
-            "cartoon_image_url": url_for("static", filename=f"results/{result_name}"),
-        }
-    )
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    debug = bool(int(os.environ.get("DEBUG", "0")))
-    app.run(host="0.0.0.0", port=port, debug=debug)
+                    # Download button
+                    _, buffer = cv2.imencode(".png", result)
+                    st.download_button(
+                        label="📥 Download High-Res PNG",
+                        data=buffer.tobytes(),
+                        file_name="cartoonified.png",
+                        mime="image/png"
+                    )
+                except Exception as e:
+                    st.error(f"❌ Error: {e}")
