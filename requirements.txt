@@ -1,5 +1,6 @@
-streamlit
-opencv-python-headless
-numpy
-pillow
+Flask>=2.3
 Werkzeug>=2.3
+opencv-python-headless>=4.8
+numpy>=1.26
+Pillow>=9.0
+gunicorn>=21.2

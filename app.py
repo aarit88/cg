@@ -1,120 +1,127 @@
-import streamlit as st
-import numpy as np
-import cv2
+import os
+import uuid
+from pathlib import Path
+from flask import Flask, render_template, request, jsonify, url_for
+from werkzeug.utils import secure_filename
 
-from cartoonify import cartoonify_image
+from cartoonify import cartoonify_image, load_image_bgr, save_image_bgr
 
 # -----------------------------
-# Page Config
+# Flask setup
 # -----------------------------
-st.set_page_config(
-    page_title="Cartoonify App",
-    page_icon="🎨",
-    layout="wide"
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+UPLOAD_DIR = STATIC_DIR / "uploads"
+RESULT_DIR = STATIC_DIR / "results"
+TEMPLATES_DIR = BASE_DIR / "templates"
+
+for p in (UPLOAD_DIR, RESULT_DIR):
+    p.mkdir(parents=True, exist_ok=True)
+
+ALLOWED_EXT = {"jpg", "jpeg", "png", "webp"}
+
+app = Flask(
+    __name__,
+    static_folder=str(STATIC_DIR),
+    template_folder=str(TEMPLATES_DIR),
 )
 
-# -----------------------------
-# Title
-# -----------------------------
-st.title("🎨 Cartoonify Image App")
-st.write("Upload an image and convert it into a cartoon style!")
 
 # -----------------------------
-# File Upload
+# Helpers
 # -----------------------------
-uploaded_file = st.file_uploader(
-    "Upload an image",
-    type=["jpg", "jpeg", "png", "webp"]
-)
+def allowed_file(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXT
 
-# -----------------------------
-# Sidebar Controls
-# -----------------------------
-st.sidebar.header("⚙️ Settings")
 
-blur_type = st.sidebar.selectbox(
-    "Blur Type",
-    ["bilateral", "median", "gaussian"]
-)
+def new_name(suffix: str = ".png") -> str:
+    return f"{uuid.uuid4().hex}{suffix}"
 
-quantizer = st.sidebar.selectbox(
-    "Quantization Method",
-    ["kmeans", "mediancut"]
-)
-
-num_colors = st.sidebar.slider(
-    "Number of Colors",
-    min_value=4,
-    max_value=32,
-    value=8
-)
-
-line_strength = st.sidebar.slider(
-    "Line Strength",
-    min_value=0.1,
-    max_value=2.0,
-    value=0.5
-)
-
-target_long_side = st.sidebar.slider(
-    "Image Resolution",
-    min_value=256,
-    max_value=2048,
-    value=1024
-)
-
-upscale_small = st.sidebar.checkbox(
-    "Upscale Small Images",
-    value=True
-)
 
 # -----------------------------
-# Processing
+# Routes
 # -----------------------------
-if uploaded_file is not None:
-    # Convert uploaded file to OpenCV format
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+@app.route("/", methods=["GET"])
+def index():
+    return render_template("index.html")
 
-    if img is None:
-        st.error("❌ Could not read the image")
-    else:
-        col1, col2 = st.columns(2)
 
-        with col1:
-            st.subheader("Original Image")
-            st.image(img, use_column_width=True)
+@app.route("/upload", methods=["POST"])
+def upload():
+    """
+    Expects form fields:
+      file: image
+      blur_type: 'bilateral' | 'median' | 'gaussian'
+      quantizer: 'kmeans' | 'mediancut'
+      num_colors: int [4..16]
+      line_strength: float [0.1..1.0]
+      target_long_side: int px
+      upscale_small: 'true' | 'false'
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "No file field"}), 400
 
-        if st.button("✨ Cartoonify Image"):
-            with st.spinner("Processing... please wait"):
-                try:
-                    result = cartoonify_image(
-                        img,
-                        blur_type=blur_type,
-                        quantizer=quantizer,
-                        num_colors=num_colors,
-                        line_strength=line_strength,
-                        target_long_side=target_long_side,
-                        upscale_small=upscale_small,
-                    )
+    f = request.files["file"]
+    if not f or f.filename == "":
+        return jsonify({"error": "No file selected"}), 400
+    if not allowed_file(f.filename):
+        return jsonify({"error": "Unsupported format"}), 400
 
-                    with col2:
-                        st.subheader("Cartoonified Image")
-                        st.image(result, use_column_width=True)
+    # Save upload
+    ext = "." + f.filename.rsplit(".", 1)[1].lower()
+    safe = secure_filename(f.filename)
+    if not allowed_file(safe):
+        safe = new_name(ext)
+    upload_name = new_name(ext)
+    upload_path = UPLOAD_DIR / upload_name
+    f.save(str(upload_path))
 
-                    # -----------------------------
-                    # Download Button
-                    # -----------------------------
-                    _, buffer = cv2.imencode(".png", result)
-                    st.download_button(
-                        label="📥 Download Image",
-                        data=buffer.tobytes(),
-                        file_name="cartoonified.png",
-                        mime="image/png"
-                    )
+    # Read params with sane fallbacks
+    blur_type = request.form.get("blur_type", "bilateral").lower()
+    quantizer = request.form.get("quantizer", "kmeans").lower()
+    try:
+        num_colors = int(request.form.get("num_colors", 8))
+    except Exception:
+        num_colors = 8
+    try:
+        line_strength = float(request.form.get("line_strength", 0.5))
+    except Exception:
+        line_strength = 0.5
+    try:
+        target_long_side = int(request.form.get("target_long_side", 1024))
+    except Exception:
+        target_long_side = 1024
+    upscale_small = request.form.get("upscale_small", "true").lower() == "true"
 
-                except Exception as e:
-                    st.error(f"❌ Error: {e}")
+    # Process
+    try:
+        src = load_image_bgr(str(upload_path))
+        out = cartoonify_image(
+            src,
+            blur_type=blur_type,
+            quantizer=quantizer,
+            num_colors=max(4, min(32, num_colors)),
+            line_strength=max(0.05, min(2.0, line_strength)),
+            target_long_side=max(256, min(4096, target_long_side)),
+            upscale_small=upscale_small,
+        )
+    except Exception as e:
+        return jsonify({"error": f"Processing failed: {e}"}), 500
 
-else:
-    st.info("👆 Upload an image to get started")
+    # Save result as PNG to avoid JPG re-compress artifacts
+    result_name = new_name(".png")
+    result_path = RESULT_DIR / result_name
+    save_image_bgr(out, str(result_path))
+
+    return jsonify(
+        {
+            "ok": True,
+            "cartoon_image_url": url_for("static", filename=f"results/{result_name}"),
+        }
+    )
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    debug = bool(int(os.environ.get("DEBUG", "0")))
+    app.run(host="0.0.0.0", port=port, debug=debug)
