@@ -47,8 +47,7 @@ st.markdown("""
   to   { opacity: 1; transform: translateY(0) }
 }
 
-/* Hide default components */
-header { visibility: hidden !important; }
+/* Removed header hidden to allow settings and share menu to be visible */
 
 /* Decorative Orbs */
 .bg-orbs { position: fixed; inset: 0; pointer-events: none; z-index: -1; overflow: hidden; }
