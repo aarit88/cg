@@ -105,8 +105,8 @@ def quantize_mediancut(bgr: np.ndarray, k: int) -> np.ndarray:
     # Use PIL's MedianCut via paletted quantize
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     pil = Image.fromarray(rgb)
-    # colors=k ensures up to k colors, method=MEDIANCUT
-    q = pil.quantize(colors=int(k), method=Image.MEDIANCUT, dither=Image.Dither.NONE)
+    # Apply dithering to Median Cut to make it visually distinct from flat K-Means (Retro/GIF style)
+    q = pil.quantize(colors=int(k), method=Image.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG)
     out = q.convert("RGB")
     return cv2.cvtColor(np.array(out), cv2.COLOR_RGB2BGR)
 
