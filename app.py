@@ -6,7 +6,7 @@ from PIL import Image
 from cartoonify import cartoonify_image
 from streamlit_image_comparison import image_comparison
 
-st.set_page_config(page_title="Sketchify Web", page_icon="🎨", layout="centered")
+st.set_page_config(page_title="Image cartoonification ", page_icon="🎨", layout="centered")
 
 st.markdown("""
 <style>
