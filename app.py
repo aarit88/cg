@@ -87,7 +87,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-st.title("🎨 Sketchify Web")
+st.title("🎨 Image Cartoonification")
 st.markdown("**AI Cartoonifier** - Transform your photos into vibrant cartoon-style artwork.", unsafe_allow_html=True)
 
 st.sidebar.header("⚙️ Settings")
@@ -109,7 +109,7 @@ if uploaded_file is not None:
     if img is None:
         st.error("❌ Could not read the image")
     else:        
-        if st.button("✦ Run Sketchify", use_container_width=True, type="primary"):
+        if st.button("✦ Run Image Cartoonification", use_container_width=True, type="primary"):
             st.markdown("<style>img { border-radius: 12px; box-shadow: 0 8px 32px rgba(99, 102, 241, 0.2); animation: fadeSlideUp 0.6s ease-out forwards; }</style>", unsafe_allow_html=True)
             with st.spinner("Processing... please wait"):
                 try:
